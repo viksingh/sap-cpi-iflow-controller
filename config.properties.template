@@ -1,0 +1,30 @@
+# ============================================================
+# SAP CPI iFlow Controller - Connection Config
+# ============================================================
+# Copy this file to config.properties and fill in your values.
+# Then run:
+#   java -jar cpi-iflow-controller.jar config.properties iflows.csv -status
+# ============================================================
+
+# --- CPI Tenant Connection ---
+# Your CPI tenant management host (TMN) URL
+# Example: https://<tenant-id>.it-cpi018.cfapps.eu10.hana.ondemand.com
+cpi.base.url=
+
+# --- Authentication ---
+# Option 1: OAuth2 Client Credentials (Recommended for BTP)
+cpi.auth.type=oauth2
+cpi.oauth.token.url=
+cpi.oauth.client.id=
+cpi.oauth.client.secret=
+
+# Option 2: Basic Authentication (Legacy / Neo)
+# cpi.auth.type=basic
+# cpi.basic.username=
+# cpi.basic.password=
+
+# --- HTTP Settings (optional overrides) ---
+# http.connect.timeout.ms=30000
+# http.read.timeout.ms=60000
+# http.max.retries=3
+# http.retry.delay.ms=2000

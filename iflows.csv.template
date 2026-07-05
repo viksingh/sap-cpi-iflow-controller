@@ -1,0 +1,9 @@
+# List of integration flows to act on.
+# Format: two columns -> package name, iFlow name.
+# The iFlow column may be either the technical id or the display name; it is
+# resolved to the technical id by looking up the package's design-time artifacts.
+# The header row is optional. Lines starting with '#' and blank lines are ignored.
+package,iflow
+MyIntegrationPackage,MyFirstIFlow
+MyIntegrationPackage,MySecondIFlow
+AnotherPackage,SomeOtherIFlow

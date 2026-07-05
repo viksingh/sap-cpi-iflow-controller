@@ -1,0 +1,17 @@
+target/
+dependency-reduced-pom.xml
+*.class
+*.jar
+*.war
+*.ear
+.idea/
+*.iml
+.settings/
+.project
+.classpath
+.env
+config.properties
+iflows.csv
+logs/
+*.log
+.DS_Store
