@@ -21,9 +21,26 @@ java -jar target/cpi-iflow-controller-1.1.0.jar config.properties iflows.csv -de
 
 # stop & undeploy
 java -jar target/cpi-iflow-controller-1.1.0.jar config.properties iflows.csv -undeploy
+
+# deploy and wait for each iFlow to finish before moving to the next
+java -jar target/cpi-iflow-controller-1.1.0.jar config.properties iflows.csv -deploy -sync
 ```
 
-Arguments: `<config-file> <iflows-csv> <-status|-deploy|-undeploy>`.
+Arguments: `<config-file> <iflows-csv> <-status|-deploy|-undeploy> [-sync]`.
+
+### `-sync`
+
+The CPI deploy/undeploy APIs are asynchronous — by default the tool fires the request and immediately moves on (reporting `DEPLOYING`/`UNDEPLOYED`). Add `-sync` to poll runtime status until each iFlow reaches a terminal state before continuing:
+
+- **deploy** waits for `STARTED` (success) or `ERROR` (failure); on `ERROR` the SAP error detail is shown in the summary.
+- **undeploy** waits for the artifact to be removed (`NOT_DEPLOYED`).
+
+If an iFlow does not settle within the timeout, it is reported as failed and the run continues. Poll interval and timeout are configurable:
+
+```properties
+deploy.poll.interval.ms=5000
+deploy.wait.timeout.ms=300000
+```
 
 ## config.properties
 
