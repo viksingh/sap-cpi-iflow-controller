@@ -39,6 +39,8 @@ public class CpiConfiguration {
         properties.setProperty("http.read.timeout.ms", "60000");
         properties.setProperty("http.max.retries", "3");
         properties.setProperty("http.retry.delay.ms", "2000");
+        properties.setProperty("deploy.poll.interval.ms", "5000");
+        properties.setProperty("deploy.wait.timeout.ms", "300000");
         properties.setProperty("cpi.api.runtime", "/api/v1/IntegrationRuntimeArtifacts");
         properties.setProperty("cpi.api.deploy", "/api/v1/DeployIntegrationDesigntimeArtifact");
         properties.setProperty("cpi.api.packageFlows",

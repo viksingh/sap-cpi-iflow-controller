@@ -41,6 +41,13 @@ public class IFlowControllerApp {
             return;
         }
 
+        boolean sync = false;
+        for (int i = 3; i < args.length; i++) {
+            if (isSyncFlag(args[i])) {
+                sync = true;
+            }
+        }
+
         try {
             CpiConfiguration config = new CpiConfiguration(configFile);
             config.validate();
@@ -54,7 +61,7 @@ public class IFlowControllerApp {
                 return;
             }
 
-            log.info("Mode: {} | iFlows: {}", mode, targets.size());
+            log.info("Mode: {} | iFlows: {} | Sync: {}", mode, targets.size(), sync);
 
             int ok = 0;
             int failed = 0;
@@ -73,18 +80,43 @@ public class IFlowControllerApp {
                             log.error("iFlow '{}' not found in package '{}'", target.iflowId(), target.packageName());
                             continue;
                         }
+                        boolean success = true;
                         switch (mode) {
                             case STATUS -> rows.add(new Row(service.getStatus(iflowId), pkg, iflow, ""));
                             case UNDEPLOY -> {
                                 service.undeploy(iflowId);
-                                rows.add(new Row("UNDEPLOYED", pkg, iflow, ""));
+                                if (sync) {
+                                    String s = service.awaitUndeployed(iflowId);
+                                    success = IFlowLifecycleService.NOT_DEPLOYED.equals(s);
+                                    rows.add(new Row(success ? "UNDEPLOYED" : s, pkg, iflow,
+                                            success ? "" : "timed out waiting for undeploy"));
+                                } else {
+                                    rows.add(new Row("UNDEPLOYED", pkg, iflow, ""));
+                                }
                             }
                             case DEPLOY -> {
                                 service.deploy(iflowId);
-                                rows.add(new Row("DEPLOYING", pkg, iflow, ""));
+                                if (sync) {
+                                    String s = service.awaitDeployed(iflowId);
+                                    success = IFlowLifecycleService.STARTED.equals(s);
+                                    String detail;
+                                    if (IFlowLifecycleService.ERROR.equals(s)) {
+                                        String info = service.getErrorInformation(iflowId);
+                                        detail = info != null ? summarize(info) : "deploy reported ERROR";
+                                    } else {
+                                        detail = success ? "" : "timed out waiting for deploy";
+                                    }
+                                    rows.add(new Row(s, pkg, iflow, detail));
+                                } else {
+                                    rows.add(new Row("DEPLOYING", pkg, iflow, ""));
+                                }
                             }
                         }
-                        ok++;
+                        if (success) {
+                            ok++;
+                        } else {
+                            failed++;
+                        }
                     } catch (Exception e) {
                         failed++;
                         rows.add(new Row("FAILED", pkg, iflow, summarize(e.getMessage())));
@@ -119,16 +151,27 @@ public class IFlowControllerApp {
         };
     }
 
+    private static boolean isSyncFlag(String arg) {
+        String a = arg.toLowerCase().replaceFirst("^-+", "");
+        return a.equals("sync") || a.equals("wait");
+    }
+
     private static void printUsage() {
         System.out.println("""
 
             USAGE:
-              java -jar cpi-iflow-controller.jar <config-file> <iflow-csv> <mode>
+              java -jar cpi-iflow-controller.jar <config-file> <iflow-csv> <mode> [-sync]
 
             MODES:
               -status     Show the runtime deployment status of each iFlow
               -deploy     Deploy (start) each iFlow on the runtime
               -undeploy   Stop and undeploy each iFlow from the runtime
+
+            OPTIONS:
+              -sync       Wait for each deploy/undeploy to reach a terminal state
+                          before moving to the next iFlow (poll interval and timeout
+                          are configurable via deploy.poll.interval.ms /
+                          deploy.wait.timeout.ms). Default: async (fire and continue).
 
             ARGUMENTS:
               <config-file>  Connection/credentials properties file (see config.properties.template)
@@ -137,7 +180,8 @@ public class IFlowControllerApp {
             EXAMPLES:
               java -jar cpi-iflow-controller.jar config.properties iflows.csv -status
               java -jar cpi-iflow-controller.jar config.properties iflows.csv -deploy
-              java -jar cpi-iflow-controller.jar config.properties iflows.csv -undeploy
+              java -jar cpi-iflow-controller.jar config.properties iflows.csv -deploy -sync
+              java -jar cpi-iflow-controller.jar config.properties iflows.csv -undeploy -sync
             """);
     }
 

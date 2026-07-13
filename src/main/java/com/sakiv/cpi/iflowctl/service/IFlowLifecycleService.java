@@ -21,6 +21,8 @@ public class IFlowLifecycleService {
     private static final ObjectMapper mapper = new ObjectMapper();
 
     public static final String NOT_DEPLOYED = "NOT_DEPLOYED";
+    public static final String STARTED = "STARTED";
+    public static final String ERROR = "ERROR";
 
     private final CpiConfiguration config;
     private final CpiHttpClient httpClient;
@@ -124,6 +126,77 @@ public class IFlowLifecycleService {
         String path = base + "?Id='" + encode(iflowId) + "'&Version='active'";
         httpClient.post(path);
         log.info("Deploy request accepted for iFlow '{}'", iflowId);
+    }
+
+    // Polls runtime status until the iFlow reaches STARTED/ERROR or the timeout
+    // elapses. Returns the last observed status. NOT_DEPLOYED is not terminal
+    // here: right after a deploy the runtime artifact may not exist yet.
+    public String awaitDeployed(String iflowId) throws IOException {
+        long interval = config.getInt("deploy.poll.interval.ms", 5000);
+        long deadline = System.currentTimeMillis() + config.getInt("deploy.wait.timeout.ms", 300000);
+        String status = "STARTING";
+        while (System.currentTimeMillis() < deadline) {
+            sleep(interval);
+            status = getStatus(iflowId);
+            log.debug("Deploy poll for '{}': {}", iflowId, status);
+            if (STARTED.equals(status) || ERROR.equals(status)) {
+                return status;
+            }
+        }
+        log.warn("Timed out waiting for iFlow '{}' to deploy (last status: {})", iflowId, status);
+        return status;
+    }
+
+    // Polls runtime status until the artifact is gone (NOT_DEPLOYED) or the
+    // timeout elapses. Returns the last observed status.
+    public String awaitUndeployed(String iflowId) throws IOException {
+        long interval = config.getInt("deploy.poll.interval.ms", 5000);
+        long deadline = System.currentTimeMillis() + config.getInt("deploy.wait.timeout.ms", 300000);
+        String status = "STOPPING";
+        while (System.currentTimeMillis() < deadline) {
+            sleep(interval);
+            status = getStatus(iflowId);
+            log.debug("Undeploy poll for '{}': {}", iflowId, status);
+            if (NOT_DEPLOYED.equals(status)) {
+                return status;
+            }
+        }
+        log.warn("Timed out waiting for iFlow '{}' to undeploy (last status: {})", iflowId, status);
+        return status;
+    }
+
+    private void sleep(long ms) throws IOException {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while waiting for iFlow runtime state", e);
+        }
+    }
+
+    // Fetches the runtime error detail SAP records for a failed deployment.
+    // Returns null when no detail is available. Never throws: this is only ever
+    // used to enrich an already-known failure, so a lookup problem must not mask it.
+    public String getErrorInformation(String iflowId) {
+        try {
+            String body = httpClient.getAllowNotFound(runtimePath(iflowId) + "/ErrorInformation/$value");
+            if (body == null || body.isBlank()) {
+                return null;
+            }
+            try {
+                JsonNode node = mapper.readTree(body);
+                JsonNode msg = node.get("message");
+                if (msg != null && !msg.isNull()) {
+                    return msg.asText();
+                }
+            } catch (IOException notJson) {
+                // ErrorInformation/$value may be plain text; fall through to raw body
+            }
+            return body.trim();
+        } catch (IOException e) {
+            log.debug("Could not fetch error information for '{}': {}", iflowId, e.getMessage());
+            return null;
+        }
     }
 
     private String runtimePath(String iflowId) {
