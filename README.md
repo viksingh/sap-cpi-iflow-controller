@@ -54,13 +54,20 @@ cpi.oauth.client.secret=your-client-secret
 
 ## iflows.csv
 
-Two columns: package name and iFlow name (technical id or display name). Header row optional.
+Two columns: package and iFlow. Header row optional.
+
+Each column accepts either the technical id or the display name:
+
+- **package** — the package id (OData key) is tried first; if that lookup fails, the tool falls back to matching the value against the display names of all packages (case-insensitive) and retries with the resolved id.
+- **iFlow** — resolved to its id by matching against both the ids and display names of the iFlows in the package.
+
+Quote any value that contains commas or spaces.
 
 ```csv
 package,iflow
 OrderToCash,SalesOrder_ECC_to_S4HANA
 OrderToCash,Delivery_S4_to_EWM
-FinanceIntegration,Invoice_IDoc_to_S4
+"SAP ERP and SAP S/4HANA Integration with SAP Ariba","SOAP Inbound Pass Through Content"
 ```
 
 ## Example output
