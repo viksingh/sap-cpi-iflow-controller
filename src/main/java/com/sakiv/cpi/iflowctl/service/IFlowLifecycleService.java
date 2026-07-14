@@ -28,6 +28,7 @@ public class IFlowLifecycleService {
     private final CpiHttpClient httpClient;
 
     private final Map<String, Map<String, String>> packageFlowCache = new HashMap<>();
+    private Map<String, String> packageIdByName;
 
     public IFlowLifecycleService(CpiConfiguration config, CpiHttpClient httpClient) {
         this.config = config;
@@ -53,7 +54,23 @@ public class IFlowLifecycleService {
         String path = String.format(pattern, encode(pkg)) + "?$format=json";
 
         Map<String, String> map = new LinkedHashMap<>();
-        String body = httpClient.getAllowNotFound(path);
+        // The package segment is an OData key (Id). Try it directly; if it fails
+        // (404, or 400 when a display name with special characters is supplied)
+        // resolve the name to an Id and retry once.
+        String body = null;
+        try {
+            body = httpClient.getAllowNotFound(path);
+        } catch (IOException directLookupFailed) {
+            log.debug("Direct package lookup for '{}' failed: {}", pkg, directLookupFailed.getMessage());
+        }
+        if (body == null) {
+            String resolvedId = resolvePackageIdByName(pkg);
+            if (resolvedId != null && !resolvedId.equals(pkg)) {
+                log.info("Package '{}' resolved by name to Id '{}'", pkg, resolvedId);
+                body = httpClient.getAllowNotFound(
+                        String.format(pattern, encode(resolvedId)) + "?$format=json");
+            }
+        }
         if (body == null) {
             log.warn("Package '{}' not found when resolving iFlow names", pkg);
             packageFlowCache.put(pkg, map);
@@ -75,6 +92,29 @@ public class IFlowLifecycleService {
         log.debug("Resolved {} iFlow id(s) in package '{}'", map.size(), pkg);
         packageFlowCache.put(pkg, map);
         return map;
+    }
+
+    // Looks up a package Id from its display Name. Returns null when no package
+    // matches. Used as a fallback so the CSV may reference a package by name.
+    // The CPI OData v1 API does not support $filter on IntegrationPackages, so
+    // the full list is fetched once and matched client-side (case-insensitive).
+    private String resolvePackageIdByName(String name) throws IOException {
+        if (packageIdByName == null) {
+            packageIdByName = new HashMap<>();
+            String body = httpClient.getAllowNotFound(
+                    "/api/v1/IntegrationPackages?$format=json");
+            JsonNode results = body != null ? extractResults(mapper.readTree(body)) : null;
+            if (results != null && results.isArray()) {
+                for (JsonNode node : results) {
+                    String id = text(node, "Id");
+                    String pkgName = text(node, "Name");
+                    if (id != null && pkgName != null) {
+                        packageIdByName.putIfAbsent(pkgName.toLowerCase(), id);
+                    }
+                }
+            }
+        }
+        return packageIdByName.get(name.toLowerCase());
     }
 
     private JsonNode extractResults(JsonNode root) {
