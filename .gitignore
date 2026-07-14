@@ -11,7 +11,7 @@ dependency-reduced-pom.xml
 .classpath
 .env
 config.properties
-iflows.csv
+*.csv
 logs/
 *.log
 .DS_Store
