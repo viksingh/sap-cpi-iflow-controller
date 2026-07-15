@@ -108,6 +108,20 @@ public class IFlowLifecycleService {
         return map;
     }
 
+    // Diagnostic: every IntegrationPackage in the tenant as {Id, Name}, across
+    // all OData pages. Used by the -packages listing to compare CSV package
+    // values against the exact Names/Ids the tenant actually exposes.
+    public java.util.List<String[]> listPackages() throws IOException {
+        JsonNode results = fetchAllResults("/api/v1/IntegrationPackages?$format=json");
+        java.util.List<String[]> out = new java.util.ArrayList<>();
+        if (results != null) {
+            for (JsonNode node : results) {
+                out.add(new String[]{orEmpty(text(node, "Id")), orEmpty(text(node, "Name"))});
+            }
+        }
+        return out;
+    }
+
     // Whether the given package (Id or display Name) was located in the tenant.
     // Only meaningful after resolveIflowId/getPackageFlows has run for it; lets
     // callers tell "package missing" apart from "iFlow missing within package".

@@ -25,13 +25,30 @@ public class IFlowControllerApp {
         log.info("SAP CPI iFlow Controller v1.1.0");
         log.info("========================================");
 
-        if (args.length < 3) {
+        if (args.length < 2) {
             printUsage();
             System.exit(1);
             return;
         }
 
         String configFile = args[0];
+
+        // Diagnostic listing: `<config> -packages` (CSV/mode not required). Dumps
+        // every package Id + Name so CSV package values can be compared against
+        // what the tenant actually exposes.
+        for (int i = 1; i < args.length; i++) {
+            if (isPackagesFlag(args[i])) {
+                listPackages(configFile);
+                return;
+            }
+        }
+
+        if (args.length < 3) {
+            printUsage();
+            System.exit(1);
+            return;
+        }
+
         String csvFile = args[1];
         Mode mode = parseMode(args[2]);
         if (mode == null) {
@@ -164,6 +181,51 @@ public class IFlowControllerApp {
         return a.equals("sync") || a.equals("wait");
     }
 
+    private static boolean isPackagesFlag(String arg) {
+        String a = arg.toLowerCase().replaceFirst("^-+", "");
+        return a.equals("packages") || a.equals("listpackages") || a.equals("list-packages");
+    }
+
+    private static void listPackages(String configFile) {
+        try {
+            CpiConfiguration config = new CpiConfiguration(configFile);
+            config.validate();
+            log.info("Config source: {}", config.getConfigSource());
+            log.info("Tenant: {}", config.getBaseUrl());
+            log.info("Auth Type: {}", config.getAuthType());
+
+            List<String[]> packages;
+            try (CpiHttpClient httpClient = new CpiHttpClient(config)) {
+                packages = new IFlowLifecycleService(config, httpClient).listPackages();
+            }
+            packages.sort((a, b) -> a[1].compareToIgnoreCase(b[1]));
+
+            int idW = "ID".length();
+            int nameW = "NAME".length();
+            for (String[] p : packages) {
+                idW = Math.max(idW, p[0].length());
+                nameW = Math.max(nameW, p[1].length());
+            }
+            String sep = "+" + "-".repeat(idW + 2) + "+" + "-".repeat(nameW + 2) + "+";
+            System.out.println();
+            System.out.println(sep);
+            System.out.printf("| %s | %s |%n", pad("ID", idW), pad("NAME", nameW));
+            System.out.println(sep);
+            for (String[] p : packages) {
+                System.out.printf("| %s | %s |%n", pad(p[0], idW), pad(p[1], nameW));
+            }
+            System.out.println(sep);
+            System.out.printf("%d package(s)%n", packages.size());
+        } catch (IllegalStateException e) {
+            log.error("Configuration Error: {}", e.getMessage());
+            printUsage();
+            System.exit(1);
+        } catch (Exception e) {
+            log.error("Run failed: {}", e.getMessage(), e);
+            System.exit(1);
+        }
+    }
+
     private static void printUsage() {
         System.out.println("""
 
@@ -174,6 +236,9 @@ public class IFlowControllerApp {
               -status     Show the runtime deployment status of each iFlow
               -deploy     Deploy (start) each iFlow on the runtime
               -undeploy   Stop and undeploy each iFlow from the runtime
+              -packages   List every package (Id + Name) in the tenant; a
+                          diagnostic for matching CSV package values. Usage:
+                          java -jar cpi-iflow-controller.jar <config-file> -packages
 
             OPTIONS:
               -sync       Wait for each deploy/undeploy to reach a terminal state
