@@ -45,6 +45,7 @@ public class IFlowLifecycleService {
     private final Map<String, Map<String, String>> packageFlowCache = new HashMap<>();
     private final Set<String> resolvedPackages = new HashSet<>();
     private Map<String, String> packageIdByName;
+    private Map<String, String> packageIdByNameNorm;
 
     public IFlowLifecycleService(CpiConfiguration config, CpiHttpClient httpClient) {
         this.config = config;
@@ -56,8 +57,29 @@ public class IFlowLifecycleService {
             return nameOrId;
         }
         Map<String, String> flows = getPackageFlows(pkg);
-        String key = nameOrId.toLowerCase();
-        return flows.get(key);
+        String hit = flows.get(nameOrId.toLowerCase());
+        if (hit == null) {
+            // Fallback: match ignoring case and every non-alphanumeric char, so
+            // differences in spacing/punctuation/invisible unicode (e.g. NBSP,
+            // en-dash) between the CSV value and the CPI name don't block a match.
+            hit = flows.get(normalizeKey(nameOrId));
+        }
+        return hit;
+    }
+
+    // Lowercased, alphanumeric-only form of a name/id used for tolerant matching.
+    private static String normalizeKey(String s) {
+        if (s == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = Character.toLowerCase(s.charAt(i));
+            if (Character.isLetterOrDigit(c)) {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     private Map<String, String> getPackageFlows(String pkg) throws IOException {
@@ -98,9 +120,11 @@ public class IFlowLifecycleService {
             String name = text(node, "Name");
             if (id != null) {
                 map.putIfAbsent(id.toLowerCase(), id);
+                map.putIfAbsent(normalizeKey(id), id);
             }
             if (name != null && id != null) {
                 map.putIfAbsent(name.toLowerCase(), id);
+                map.putIfAbsent(normalizeKey(name), id);
             }
         }
         log.debug("Resolved {} iFlow id(s) in package '{}'", map.size(), pkg);
@@ -176,19 +200,30 @@ public class IFlowLifecycleService {
     private String resolvePackageIdByName(String name) throws IOException {
         if (packageIdByName == null) {
             packageIdByName = new HashMap<>();
+            packageIdByNameNorm = new HashMap<>();
+            int pkgCount = 0;
             JsonNode results = fetchAllResults("/api/v1/IntegrationPackages?$format=json");
             if (results != null) {
                 for (JsonNode node : results) {
                     String id = text(node, "Id");
                     String pkgName = text(node, "Name");
                     if (id != null && pkgName != null) {
+                        pkgCount++;
                         packageIdByName.putIfAbsent(pkgName.toLowerCase(), id);
+                        packageIdByNameNorm.putIfAbsent(normalizeKey(pkgName), id);
+                        packageIdByNameNorm.putIfAbsent(normalizeKey(id), id);
                     }
                 }
             }
-            log.debug("Loaded {} package name->id mapping(s)", packageIdByName.size());
+            log.info("Loaded {} package name->id mapping(s)", pkgCount);
         }
-        return packageIdByName.get(name.toLowerCase());
+        String hit = packageIdByName.get(name.toLowerCase());
+        if (hit == null) {
+            // Fallback tolerant of spacing/punctuation/invisible-unicode drift
+            // between the CSV package value and the tenant's stored Name.
+            hit = packageIdByNameNorm.get(normalizeKey(name));
+        }
+        return hit;
     }
 
     private JsonNode extractResults(JsonNode root) {
