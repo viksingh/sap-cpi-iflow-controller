@@ -30,7 +30,7 @@ Arguments: `<config-file> <iflows-csv> <-status|-deploy|-undeploy> [-sync]`.
 
 ### `-status`
 
-Shows the runtime deployment status of each iFlow. For deployed artifacts the summary also includes **DEPLOYED ON** (deployment timestamp, from CPI's `DeployedOn`, shown in local time) and **DEPLOYED BY** (the user that deployed it, from `DeployedBy`). These two columns appear only when at least one iFlow is deployed.
+Shows the runtime deployment status of each iFlow. For deployed artifacts the summary also includes **DEPLOYED ON** (deployment timestamp, from CPI's `DeployedOn`, normalised to local `yyyy-MM-dd HH:mm:ss` whether the tenant returns it as ISO-8601 or the Edm `/Date(ms)/` format) and **DEPLOYED BY** (from `DeployedBy` — a user email for deployments done in the Web UI, or the OAuth client id for deployments done via the API). These two columns appear only when at least one iFlow is deployed.
 
 ### `-sync`
 
