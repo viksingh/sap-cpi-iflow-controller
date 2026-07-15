@@ -28,6 +28,10 @@ java -jar target/cpi-iflow-controller-1.1.0.jar config.properties iflows.csv -de
 
 Arguments: `<config-file> <iflows-csv> <-status|-deploy|-undeploy> [-sync]`.
 
+### `-status`
+
+Shows the runtime deployment status of each iFlow. For deployed artifacts the summary also includes **DEPLOYED ON** (deployment timestamp, from CPI's `DeployedOn`, shown in local time) and **DEPLOYED BY** (the user that deployed it, from `DeployedBy`). These two columns appear only when at least one iFlow is deployed.
+
 ### `-sync`
 
 The CPI deploy/undeploy APIs are asynchronous — by default the tool fires the request and immediately moves on (reporting `DEPLOYING`/`UNDEPLOYED`). Add `-sync` to poll runtime status until each iFlow reaches a terminal state before continuing:
@@ -73,12 +77,12 @@ OrderToCash,Delivery_S4_to_EWM
 ## Example output
 
 ```text
-+--------------+----------------------+--------------------------------+
-| STATUS       | PACKAGE              | IFLOW                          |
-+--------------+----------------------+--------------------------------+
-| STARTED      | OrderToCash          | SalesOrder_ECC_to_S4HANA       |
-| ERROR        | OrderToCash          | Delivery_S4_to_EWM             |
-| STARTED      | FinanceIntegration   | Invoice_IDoc_to_S4             |
-+--------------+----------------------+--------------------------------+
++--------------+----------------------+--------------------------------+---------------------+-------------+
+| STATUS       | PACKAGE              | IFLOW                          | DEPLOYED ON         | DEPLOYED BY |
++--------------+----------------------+--------------------------------+---------------------+-------------+
+| STARTED      | OrderToCash          | SalesOrder_ECC_to_S4HANA       | 2026-07-14 09:12:03 | vikas       |
+| ERROR        | OrderToCash          | Delivery_S4_to_EWM             | 2026-07-14 09:12:41 | vikas       |
+| STARTED      | FinanceIntegration   | Invoice_IDoc_to_S4             | 2026-07-13 18:02:55 | admin       |
++--------------+----------------------+--------------------------------+---------------------+-------------+
 Summary: 3 succeeded, 0 failed (3 total)
 ```

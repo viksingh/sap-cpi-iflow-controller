@@ -76,13 +76,21 @@ public class IFlowControllerApp {
                         String iflowId = service.resolveIflowId(target.packageName(), target.iflowId());
                         if (iflowId == null) {
                             failed++;
-                            rows.add(new Row("NOT_FOUND", pkg, iflow, "iFlow not found in package"));
-                            log.error("iFlow '{}' not found in package '{}'", target.iflowId(), target.packageName());
+                            String detail = service.packageResolved(target.packageName())
+                                    ? "iFlow not found in package"
+                                    : "package not found in tenant";
+                            rows.add(new Row("NOT_FOUND", pkg, iflow, detail));
+                            log.error("iFlow '{}' not resolved: {} (package '{}')",
+                                    target.iflowId(), detail, target.packageName());
                             continue;
                         }
                         boolean success = true;
                         switch (mode) {
-                            case STATUS -> rows.add(new Row(service.getStatus(iflowId), pkg, iflow, ""));
+                            case STATUS -> {
+                                var info = service.getRuntimeInfo(iflowId);
+                                rows.add(new Row(info.status(), pkg, iflow, "",
+                                        info.deployedOn(), info.deployedBy()));
+                            }
                             case UNDEPLOY -> {
                                 service.undeploy(iflowId);
                                 if (sync) {
@@ -185,7 +193,12 @@ public class IFlowControllerApp {
             """);
     }
 
-    private record Row(String result, String pkg, String iflow, String detail) {}
+    private record Row(String result, String pkg, String iflow, String detail,
+                       String deployedOn, String deployedBy) {
+        Row(String result, String pkg, String iflow, String detail) {
+            this(result, pkg, iflow, detail, "", "");
+        }
+    }
 
     private static String summarize(String msg) {
         if (msg == null) {
@@ -196,21 +209,48 @@ public class IFlowControllerApp {
     }
 
     private static void printSummary(List<Row> rows, Mode mode, int ok, int failed) {
-        String resultHeader = mode == Mode.STATUS ? "STATUS" : "RESULT";
-        String[] headers = {resultHeader, "PACKAGE", "IFLOW", "DETAIL"};
-
+        boolean statusMode = mode == Mode.STATUS;
         boolean hasDetail = rows.stream().anyMatch(r -> !r.detail().isEmpty());
-        int cols = hasDetail ? 4 : 3;
+        boolean hasDeployInfo = statusMode && rows.stream()
+                .anyMatch(r -> !r.deployedOn().isEmpty() || !r.deployedBy().isEmpty());
 
-        int[] w = new int[4];
-        for (int i = 0; i < cols; i++) {
-            w[i] = headers[i].length();
+        List<String> headers = new ArrayList<>();
+        headers.add(statusMode ? "STATUS" : "RESULT");
+        headers.add("PACKAGE");
+        headers.add("IFLOW");
+        if (hasDeployInfo) {
+            headers.add("DEPLOYED ON");
+            headers.add("DEPLOYED BY");
         }
+        if (hasDetail) {
+            headers.add("DETAIL");
+        }
+
+        List<String[]> table = new ArrayList<>();
         for (Row r : rows) {
-            w[0] = Math.max(w[0], r.result().length());
-            w[1] = Math.max(w[1], r.pkg().length());
-            w[2] = Math.max(w[2], r.iflow().length());
-            w[3] = Math.max(w[3], r.detail().length());
+            List<String> cells = new ArrayList<>();
+            cells.add(r.result());
+            cells.add(r.pkg());
+            cells.add(r.iflow());
+            if (hasDeployInfo) {
+                cells.add(r.deployedOn());
+                cells.add(r.deployedBy());
+            }
+            if (hasDetail) {
+                cells.add(r.detail());
+            }
+            table.add(cells.toArray(new String[0]));
+        }
+
+        int cols = headers.size();
+        int[] w = new int[cols];
+        for (int i = 0; i < cols; i++) {
+            w[i] = headers.get(i).length();
+        }
+        for (String[] row : table) {
+            for (int i = 0; i < cols; i++) {
+                w[i] = Math.max(w[i], row[i].length());
+            }
         }
 
         StringBuilder sep = new StringBuilder("+");
@@ -220,10 +260,10 @@ public class IFlowControllerApp {
 
         System.out.println();
         System.out.println(sep);
-        printTableRow(headers, w, cols);
+        printTableRow(headers.toArray(new String[0]), w, cols);
         System.out.println(sep);
-        for (Row r : rows) {
-            printTableRow(new String[]{r.result(), r.pkg(), r.iflow(), r.detail()}, w, cols);
+        for (String[] row : table) {
+            printTableRow(row, w, cols);
         }
         System.out.println(sep);
         System.out.printf("Summary: %d succeeded, %d failed (%d total)%n", ok, failed, rows.size());

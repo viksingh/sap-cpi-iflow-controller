@@ -2,6 +2,7 @@ package com.sakiv.cpi.iflowctl.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.sakiv.cpi.iflowctl.config.CpiConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,9 +10,19 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.net.URLEncoder;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 // @author Vikas Singh
 // Created: 2026-06-18
@@ -24,10 +35,15 @@ public class IFlowLifecycleService {
     public static final String STARTED = "STARTED";
     public static final String ERROR = "ERROR";
 
+    private static final Pattern EDM_DATE = Pattern.compile("/Date\\((-?\\d+)");
+    private static final DateTimeFormatter DEPLOYED_ON_FORMAT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
     private final CpiConfiguration config;
     private final CpiHttpClient httpClient;
 
     private final Map<String, Map<String, String>> packageFlowCache = new HashMap<>();
+    private final Set<String> resolvedPackages = new HashSet<>();
     private Map<String, String> packageIdByName;
 
     public IFlowLifecycleService(CpiConfiguration config, CpiHttpClient httpClient) {
@@ -57,41 +73,86 @@ public class IFlowLifecycleService {
         // The package segment is an OData key (Id). Try it directly; if it fails
         // (404, or 400 when a display name with special characters is supplied)
         // resolve the name to an Id and retry once.
-        String body = null;
+        JsonNode results = null;
         try {
-            body = httpClient.getAllowNotFound(path);
+            results = fetchAllResults(path);
         } catch (IOException directLookupFailed) {
             log.debug("Direct package lookup for '{}' failed: {}", pkg, directLookupFailed.getMessage());
         }
-        if (body == null) {
+        if (results == null) {
             String resolvedId = resolvePackageIdByName(pkg);
-            if (resolvedId != null && !resolvedId.equals(pkg)) {
+            if (resolvedId != null && !resolvedId.equalsIgnoreCase(pkg)) {
                 log.info("Package '{}' resolved by name to Id '{}'", pkg, resolvedId);
-                body = httpClient.getAllowNotFound(
+                results = fetchAllResults(
                         String.format(pattern, encode(resolvedId)) + "?$format=json");
             }
         }
-        if (body == null) {
+        if (results == null) {
             log.warn("Package '{}' not found when resolving iFlow names", pkg);
             packageFlowCache.put(pkg, map);
             return map;
         }
-        JsonNode results = extractResults(mapper.readTree(body));
-        if (results != null && results.isArray()) {
-            for (JsonNode node : results) {
-                String id = text(node, "Id");
-                String name = text(node, "Name");
-                if (id != null) {
-                    map.putIfAbsent(id.toLowerCase(), id);
-                }
-                if (name != null && id != null) {
-                    map.putIfAbsent(name.toLowerCase(), id);
-                }
+        resolvedPackages.add(pkg.toLowerCase());
+        for (JsonNode node : results) {
+            String id = text(node, "Id");
+            String name = text(node, "Name");
+            if (id != null) {
+                map.putIfAbsent(id.toLowerCase(), id);
+            }
+            if (name != null && id != null) {
+                map.putIfAbsent(name.toLowerCase(), id);
             }
         }
         log.debug("Resolved {} iFlow id(s) in package '{}'", map.size(), pkg);
         packageFlowCache.put(pkg, map);
         return map;
+    }
+
+    // Whether the given package (Id or display Name) was located in the tenant.
+    // Only meaningful after resolveIflowId/getPackageFlows has run for it; lets
+    // callers tell "package missing" apart from "iFlow missing within package".
+    public boolean packageResolved(String pkg) {
+        return pkg == null || pkg.isBlank() || resolvedPackages.contains(pkg.toLowerCase());
+    }
+
+    // Fetches every page of an OData v1 collection, following the d.__next
+    // continuation links CPI returns when a result set spans multiple pages.
+    // Returns null only when the first page 404s (collection/key not found);
+    // otherwise an array (possibly empty) of all rows across pages.
+    private JsonNode fetchAllResults(String path) throws IOException {
+        ArrayNode all = mapper.createArrayNode();
+        String next = path;
+        boolean firstPageSeen = false;
+        int guard = 0;
+        while (next != null && guard++ < 10_000) {
+            String body = httpClient.getAllowNotFound(next);
+            if (body == null) {
+                return firstPageSeen ? all : null;
+            }
+            firstPageSeen = true;
+            JsonNode root = mapper.readTree(body);
+            JsonNode page = extractResults(root);
+            if (page != null && page.isArray()) {
+                all.addAll((ArrayNode) page);
+            }
+            next = nextLink(root);
+        }
+        return all;
+    }
+
+    // Extracts the OData continuation link (v1 d.__next, or v4 @odata.nextLink)
+    // and ensures it still requests JSON so paging does not silently flip to XML.
+    private String nextLink(JsonNode root) {
+        JsonNode v1 = root.path("d").path("__next");
+        JsonNode link = v1.isTextual() ? v1 : root.path("@odata.nextLink");
+        if (!link.isTextual()) {
+            return null;
+        }
+        String url = link.asText();
+        if (!url.contains("$format")) {
+            url += (url.contains("?") ? "&" : "?") + "$format=json";
+        }
+        return url;
     }
 
     // Looks up a package Id from its display Name. Returns null when no package
@@ -101,10 +162,8 @@ public class IFlowLifecycleService {
     private String resolvePackageIdByName(String name) throws IOException {
         if (packageIdByName == null) {
             packageIdByName = new HashMap<>();
-            String body = httpClient.getAllowNotFound(
-                    "/api/v1/IntegrationPackages?$format=json");
-            JsonNode results = body != null ? extractResults(mapper.readTree(body)) : null;
-            if (results != null && results.isArray()) {
+            JsonNode results = fetchAllResults("/api/v1/IntegrationPackages?$format=json");
+            if (results != null) {
                 for (JsonNode node : results) {
                     String id = text(node, "Id");
                     String pkgName = text(node, "Name");
@@ -113,6 +172,7 @@ public class IFlowLifecycleService {
                     }
                 }
             }
+            log.debug("Loaded {} package name->id mapping(s)", packageIdByName.size());
         }
         return packageIdByName.get(name.toLowerCase());
     }
@@ -152,6 +212,56 @@ public class IFlowLifecycleService {
         JsonNode node = root.has("d") ? root.get("d") : root;
         JsonNode status = node.get("Status");
         return status != null && !status.isNull() ? status.asText() : "UNKNOWN";
+    }
+
+    // Runtime deployment metadata for an iFlow: status plus who deployed it and
+    // when. DeployedOn is returned by CPI in the Edm.DateTime wire format
+    // (/Date(<epochMillis>)/); it is parsed to a local "yyyy-MM-dd HH:mm:ss".
+    public record RuntimeInfo(String status, String deployedOn, String deployedBy) {}
+
+    public RuntimeInfo getRuntimeInfo(String iflowId) throws IOException {
+        String body = httpClient.getAllowNotFound(runtimePath(iflowId));
+        if (body == null) {
+            return new RuntimeInfo(NOT_DEPLOYED, "", "");
+        }
+        JsonNode root = mapper.readTree(body);
+        JsonNode node = root.has("d") ? root.get("d") : root;
+        String status = text(node, "Status");
+        return new RuntimeInfo(
+                status != null ? status : "UNKNOWN",
+                formatEdmDate(text(node, "DeployedOn")),
+                orEmpty(text(node, "DeployedBy")));
+    }
+
+    // CPI returns DeployedOn either as the Edm.DateTime wire format
+    // (/Date(<epochMillis>)/) or as an ISO-8601 string (e.g.
+    // 2026-07-14T11:06:35.176). Both are normalised to "yyyy-MM-dd HH:mm:ss";
+    // anything unrecognised is passed through unchanged.
+    private String formatEdmDate(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "";
+        }
+        Matcher m = EDM_DATE.matcher(raw);
+        if (m.find()) {
+            return Instant.ofEpochMilli(Long.parseLong(m.group(1)))
+                    .atZone(ZoneId.systemDefault())
+                    .format(DEPLOYED_ON_FORMAT);
+        }
+        try {
+            return OffsetDateTime.parse(raw)
+                    .atZoneSameInstant(ZoneId.systemDefault())
+                    .format(DEPLOYED_ON_FORMAT);
+        } catch (DateTimeParseException noOffset) {
+            try {
+                return LocalDateTime.parse(raw).format(DEPLOYED_ON_FORMAT);
+            } catch (DateTimeParseException notIso) {
+                return raw;
+            }
+        }
+    }
+
+    private String orEmpty(String s) {
+        return s == null ? "" : s;
     }
 
     public void undeploy(String iflowId) throws IOException {
